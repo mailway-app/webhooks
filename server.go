@@ -1,16 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"net"
-	"time"
-	"strings"
 	"net/http"
-	"bytes"
+	"net/mail"
+	"strings"
+	"time"
 
 	"github.com/mailway-app/config"
 
 	"github.com/mhale/smtpd"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -34,41 +36,45 @@ func Run(addr string) error {
 }
 
 func callHook(from string, to []string, subject string) error {
-    log.Printf("call hook\n")
+	log.Printf("call hook\n")
 
-/*	TODO(frd): to send param with request, not url, actualy bugged. fix or delete
-    var jsonStr = []byte(`{"id": "17455ee7-5b62-4d12-98a1-38ba9950abd8", "data": "[]", "name": "aaaa", "initialState": "2"}`)
-    url := "http://127.0.0.1:9080/administration/entretiens/API/exportWorkflow"
+	/*	TODO(frd): to send param with request, not url, actualy bugged. fix or delete
+	    var jsonStr = []byte(`{"id": "17455ee7-5b62-4d12-98a1-38ba9950abd8", "data": "[]", "name": "aaaa", "initialState": "2"}`)
+	    url := "http://127.0.0.1:9080/administration/entretiens/API/exportWorkflow"
 
-    req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonStr))
-    req.Header.Set("X-Custom-Header", "myvalue")
-    req.Header.Set("Content-Type", "application/json")
-//*/
+	    req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonStr))
+	    req.Header.Set("X-Custom-Header", "myvalue")
+	    req.Header.Set("Content-Type", "application/json")
+	//*/
 
 	paramUrl := "?from=" + from + "&to=" + strings.Join(to, ",") + "&subject=" + subject
 	// TODO(frd): use config hook url
-    url := "http://127.0.0.1:9080/test" + paramUrl
-    req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte{}))
+	url := "http://127.0.0.1:9080/test" + paramUrl
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte{}))
 
-    client := &http.Client{}
-    resp, err := client.Do(req)
-    if err != nil {
-        panic(err)
-    }
-    defer resp.Body.Close()
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Error(err)
+		return err
+	}
+	defer resp.Body.Close()
 
 	log.Printf("response Status : %s", resp.Status)
-    fmt.Println(resp)
+	fmt.Println(resp)
 
-    return nil
+	return nil
 }
 
 func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
+	msg, err := mail.ReadMessage(bytes.NewReader(in))
+	if err != nil {
+		return errors.Wrap(err, "could not parse message")
+	}
+
 	fmt.Printf("%s forwarded an email, %s -> %s\n", origin, from, to)
 
-	tabIn := strings.Split(string(in), "\n")
-	longSubject := tabIn[3]
-	subject := string(longSubject[9:len(longSubject)])
+	subject := msg.Header.Get("Subject")
 	fmt.Println(subject)
 
 	callHook(from, to, subject)
