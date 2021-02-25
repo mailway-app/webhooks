@@ -40,27 +40,19 @@ func Run(addr string) error {
 	return srv.ListenAndServe()
 }
 
-func callHook(headers string, urlAccess string, domain string, id string, signature string) error {
+func callHook(wp WebhookPayload, urlWebhook string, uuid string, domain string, signature string) error {
     log.Printf("call hook\n")
 
-    data := &WebhookPayload{
-        Headers: headers,
-        BodyURL: urlAccess,
-    }
-
-    jsonData, err := json.Marshal(data)
+    jsonData, err := json.Marshal(wp)
     if err != nil {
         log.Error(err)
         return err
     }
 
-    // TODO(frd): use config hook url
-    url := "http://httpbin.org/post"
-
-    req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+    req, err := http.NewRequest("POST", urlWebhook, bytes.NewBuffer(jsonData))
     req.Header.Set("Content-Type", "application/json")
     req.Header.Set("Mw-Domain", domain)
-    req.Header.Set("Mw-Id", id)
+    req.Header.Set("Mw-Id", uuid)
     req.Header.Set("Mw-Signature", signature)
 
     client := &http.Client{}
@@ -91,7 +83,17 @@ func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
         return err
     }
 
-	callHook((string)(headers), "url", "domain", "id", "signature")
+    urlWebhook := msg.Header.Get("Mw-Int-Webhook-Url")
+    urlMail := ""
+    uuid := msg.Header.Get("Mw-Int-Id")
+    domain := msg.Header.Get("Mw-Int-Domain")
+
+    data := &WebhookPayload{
+        Headers: (string)(headers),
+        BodyURL: urlMail,
+    }
+
+	callHook(*data, urlWebhook, uuid, domain, "signature")
 
 	return nil
 }
