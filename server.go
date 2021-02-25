@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/mail"
+	"os"
 	"strings"
 	"time"
 
@@ -37,6 +38,16 @@ func logger(remoteIP, verb, line string) {
 	log.Printf("%s %s %s\n", remoteIP, verb, line)
 }
 
+func saveBuffer(id string) error {
+	src := fmt.Sprintf("/tmp/%s.eml", id)
+	dest := fmt.Sprintf("/usr/local/lib/maildb/%s.eml", id)
+	err := os.Rename(src, dest)
+	if err != nil {
+		return errors.Wrap(err, "could not move file")
+	}
+	return nil
+}
+
 func Run(addr string) error {
 	smtpd.Debug = true
 	srv := &smtpd.Server{
@@ -52,7 +63,7 @@ func Run(addr string) error {
 	return srv.ListenAndServe()
 }
 
-func callWebHook(wp WebhookPayload, url string, uuid string, domain string) error {
+func callWebHook(wp WebhookPayload, url string, id string, domain string) error {
 	jsonData, err := json.Marshal(wp)
 	if err != nil {
 		return errors.Wrap(err, "could not serialize request payload")
@@ -66,7 +77,7 @@ func callWebHook(wp WebhookPayload, url string, uuid string, domain string) erro
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Mw-Domain", domain)
-	req.Header.Set("Mw-Id", uuid)
+	req.Header.Set("Mw-Id", id)
 	req.Header.Set("Mw-Signature", signature)
 
 	resp, err := httpClient.Do(req)
@@ -76,7 +87,12 @@ func callWebHook(wp WebhookPayload, url string, uuid string, domain string) erro
 	defer resp.Body.Close()
 
 	log.Infof("webhook returned: %d %s", resp.StatusCode, resp.Status)
-	return nil
+
+	if resp.StatusCode != 200 {
+		return errors.Errorf("webhook returned %d %s", resp.StatusCode, resp.Status)
+	} else {
+		return nil
+	}
 }
 
 func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
@@ -86,9 +102,15 @@ func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
 		return internalError
 	}
 
+	id := msg.Header.Get("Mw-Int-Id")
+
+	if err := saveBuffer(id); err != nil {
+		log.Errorf("failed to save email buffer: %s", err)
+		return internalError
+	}
+
 	url := msg.Header.Get("Mw-Int-Webhook-Url")
 	urlMail := ""
-	uuid := msg.Header.Get("Mw-Int-Id")
 	domain := msg.Header.Get("Mw-Int-Domain")
 
 	for key := range msg.Header {
@@ -102,9 +124,15 @@ func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
 		BodyURL: urlMail,
 	}
 
-	if err := callWebHook(*data, url, uuid, domain); err != nil {
+	if err := callWebHook(*data, url, id, domain); err != nil {
+		if err := updateMailStatus(config.CurrConfig.ServerJWT, domain, id, MAIL_STATUS_DELIVERY_ERROR); err != nil {
+			log.Errorf("could not update email status in maildb: %s", err)
+		}
 		log.Warnf("could not call webhook: %s", err)
 		return internalError
+	}
+	if err := updateMailStatus(config.CurrConfig.ServerJWT, domain, id, MAIL_STATUS_DELIVERED); err != nil {
+		log.Errorf("could not update email status in maildb: %s", err)
 	}
 	return nil
 }
@@ -120,9 +148,7 @@ func main() {
 		Timeout: 60 * time.Second,
 	}
 
-	// TODO(sven): use config version
-	// addr := fmt.Sprintf("127.0.0.1:%d", config.CurrConfig.PortWebhooks)
-	addr := fmt.Sprintf("127.0.0.1:%d", 2526)
+	addr := fmt.Sprintf("127.0.0.1:%d", config.CurrConfig.PortWebhook)
 	if err := Run(addr); err != nil {
 		log.Fatal(err)
 	}
