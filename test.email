@@ -1,4 +1,6 @@
-Mw-Int-Webhook-URL: https://httpbin.org/post
+Mw-Int-Domain: domain.com
+Mw-Int-Id: 1
+Mw-Int-Webhook-URL: http://l:8000
 Mw-Int-Webhook-Secret-Token: YzdjZTZhM2ZhMDllNWIwMjg1ZDhhZmIz
 Subject: test subject
 

@@ -7,8 +7,8 @@ import (
 	"net"
 	"net/http"
 	"net/mail"
+	"strings"
 	"time"
-	"io/ioutil"
 
 	"github.com/mailway-app/config"
 
@@ -17,9 +17,18 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type WebhookPayload struct  {
-    Headers string `json:"headers"`
-    BodyURL string `json:"bodyURL"`
+// https://www.iana.org/assignments/smtp-enhanced-status-codes/smtp-enhanced-status-codes.xhtml
+var (
+	internalError = errors.New("451 4.3.0 Internal server errror")
+)
+
+const (
+	INT_HEADER_PREFIX = "mw-int-"
+)
+
+type WebhookPayload struct {
+	Headers mail.Header `json:"headers"`
+	BodyURL string      `json:"bodyURL"`
 }
 
 func logger(remoteIP, verb, line string) {
@@ -41,68 +50,61 @@ func Run(addr string) error {
 	return srv.ListenAndServe()
 }
 
-func callHook(wp WebhookPayload, urlWebhook string, uuid string, domain string, signature string) error {
-    log.Printf("call hook\n")
+func callWebHook(wp WebhookPayload, url string, uuid string, domain string) error {
+	jsonData, err := json.Marshal(wp)
+	if err != nil {
+		return errors.Wrap(err, "could not serialize request payload")
+	}
 
-    jsonData, err := json.Marshal(wp)
-    if err != nil {
-        log.Error(err)
-        return err
-    }
+	signature := ""
 
-    req, err := http.NewRequest("POST", urlWebhook, bytes.NewBuffer(jsonData))
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("Mw-Domain", domain)
-    req.Header.Set("Mw-Id", uuid)
-    req.Header.Set("Mw-Signature", signature)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return errors.Wrap(err, "could not create request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Mw-Domain", domain)
+	req.Header.Set("Mw-Id", uuid)
+	req.Header.Set("Mw-Signature", signature)
 
-    client := &http.Client{}
-    resp, err := client.Do(req)
-    if err != nil {
-        log.Error(err)
-        return err
-    }
-    defer resp.Body.Close()
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return errors.Wrap(err, "could not send request")
+	}
+	defer resp.Body.Close()
 
-    log.Printf("response Status : %s", resp.Status)
-    fmt.Println(resp)
-
-    bodyBytes, err := ioutil.ReadAll(resp.Body)
-    if err != nil {
-        log.Fatal(err)
-    }
-    bodyString := string(bodyBytes)
-    log.Info(bodyString)
-
-    return nil
+	log.Infof("webhook returned: %d %s", resp.StatusCode, resp.Status)
+	return nil
 }
 
 func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
 	msg, err := mail.ReadMessage(bytes.NewReader(in))
 	if err != nil {
-		return errors.Wrap(err, "could not parse message")
+		log.Errorf("failed to parse message: %s", err)
+		return internalError
 	}
 
-	fmt.Printf("%s forwarded an email, %s -> %s\n", origin, from, to)
+	url := msg.Header.Get("Mw-Int-Webhook-Url")
+	urlMail := ""
+	uuid := msg.Header.Get("Mw-Int-Id")
+	domain := msg.Header.Get("Mw-Int-Domain")
 
-    headers, err := json.Marshal(msg.Header)
-    if err != nil {
-        log.Error(err)
-        return err
-    }
+	for key := range msg.Header {
+		if strings.HasPrefix(strings.ToLower(key), INT_HEADER_PREFIX) {
+			delete(msg.Header, key)
+		}
+	}
 
-    urlWebhook := msg.Header.Get("Mw-Int-Webhook-Url")
-    urlMail := ""
-    uuid := msg.Header.Get("Mw-Int-Id")
-    domain := msg.Header.Get("Mw-Int-Domain")
+	data := &WebhookPayload{
+		Headers: msg.Header,
+		BodyURL: urlMail,
+	}
 
-    data := &WebhookPayload{
-        Headers: (string)(headers),
-        BodyURL: urlMail,
-    }
-
-	callHook(*data, urlWebhook, uuid, domain, "signature")
-
+	if err := callWebHook(*data, url, uuid, domain); err != nil {
+		log.Errorf("could not call webhook: %s", err)
+		return internalError
+	}
 	return nil
 }
 
