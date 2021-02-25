@@ -2,12 +2,13 @@ package main
 
 import (
 	"bytes"
-    "encoding/json"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"net/mail"
 	"time"
+	"io/ioutil"
 
 	"github.com/mailway-app/config"
 
@@ -65,6 +66,13 @@ func callHook(wp WebhookPayload, urlWebhook string, uuid string, domain string, 
 
     log.Printf("response Status : %s", resp.Status)
     fmt.Println(resp)
+
+    bodyBytes, err := ioutil.ReadAll(resp.Body)
+    if err != nil {
+        log.Fatal(err)
+    }
+    bodyString := string(bodyBytes)
+    log.Info(bodyString)
 
     return nil
 }
