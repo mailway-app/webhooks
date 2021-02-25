@@ -12,6 +12,7 @@ import (
 
 	"github.com/mailway-app/config"
 
+	"github.com/hashicorp/go-retryablehttp"
 	"github.com/mhale/smtpd"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -20,6 +21,7 @@ import (
 // https://www.iana.org/assignments/smtp-enhanced-status-codes/smtp-enhanced-status-codes.xhtml
 var (
 	internalError = errors.New("451 4.3.0 Internal server errror")
+	httpClient    *retryablehttp.Client
 )
 
 const (
@@ -58,7 +60,7 @@ func callWebHook(wp WebhookPayload, url string, uuid string, domain string) erro
 
 	signature := ""
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := retryablehttp.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return errors.Wrap(err, "could not create request")
 	}
@@ -67,8 +69,7 @@ func callWebHook(wp WebhookPayload, url string, uuid string, domain string) erro
 	req.Header.Set("Mw-Id", uuid)
 	req.Header.Set("Mw-Signature", signature)
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return errors.Wrap(err, "could not send request")
 	}
@@ -102,7 +103,7 @@ func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
 	}
 
 	if err := callWebHook(*data, url, uuid, domain); err != nil {
-		log.Errorf("could not call webhook: %s", err)
+		log.Warnf("could not call webhook: %s", err)
 		return internalError
 	}
 	return nil
@@ -111,6 +112,12 @@ func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
 func main() {
 	if err := config.Init(); err != nil {
 		log.Fatalf("failed to init config: %s", err)
+	}
+
+	httpClient = retryablehttp.NewClient()
+	httpClient.RetryMax = 5
+	httpClient.HTTPClient = &http.Client{
+		Timeout: 60 * time.Second,
 	}
 
 	// TODO(sven): use config version
