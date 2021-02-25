@@ -2,11 +2,11 @@ package main
 
 import (
 	"bytes"
+    "encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"net/mail"
-	"strings"
 	"time"
 
 	"github.com/mailway-app/config"
@@ -15,6 +15,11 @@ import (
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
+
+type WebhookPayload struct  {
+    Headers string `json:"headers"`
+    BodyURL string `json:"bodyURL"`
+}
 
 func logger(remoteIP, verb, line string) {
 	log.Printf("%s %s %s\n", remoteIP, verb, line)
@@ -35,35 +40,41 @@ func Run(addr string) error {
 	return srv.ListenAndServe()
 }
 
-func callHook(from string, to []string, subject string) error {
-	log.Printf("call hook\n")
+func callHook(headers string, urlAccess string, domain string, id string, signature string) error {
+    log.Printf("call hook\n")
 
-	/*	TODO(frd): to send param with request, not url, actualy bugged. fix or delete
-	    var jsonStr = []byte(`{"id": "17455ee7-5b62-4d12-98a1-38ba9950abd8", "data": "[]", "name": "aaaa", "initialState": "2"}`)
-	    url := "http://127.0.0.1:9080/administration/entretiens/API/exportWorkflow"
+    data := &WebhookPayload{
+        Headers: headers,
+        BodyURL: urlAccess,
+    }
 
-	    req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonStr))
-	    req.Header.Set("X-Custom-Header", "myvalue")
-	    req.Header.Set("Content-Type", "application/json")
-	//*/
+    jsonData, err := json.Marshal(data)
+    if err != nil {
+        log.Error(err)
+        return err
+    }
 
-	paramUrl := "?from=" + from + "&to=" + strings.Join(to, ",") + "&subject=" + subject
-	// TODO(frd): use config hook url
-	url := "http://127.0.0.1:9080/test" + paramUrl
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte{}))
+    // TODO(frd): use config hook url
+    url := "http://httpbin.org/post"
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Error(err)
-		return err
-	}
-	defer resp.Body.Close()
+    req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+    req.Header.Set("Content-Type", "application/json")
+    req.Header.Set("Mw-Domain", domain)
+    req.Header.Set("Mw-Id", id)
+    req.Header.Set("Mw-Signature", signature)
 
-	log.Printf("response Status : %s", resp.Status)
-	fmt.Println(resp)
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    if err != nil {
+        log.Error(err)
+        return err
+    }
+    defer resp.Body.Close()
 
-	return nil
+    log.Printf("response Status : %s", resp.Status)
+    fmt.Println(resp)
+
+    return nil
 }
 
 func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
@@ -74,10 +85,13 @@ func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
 
 	fmt.Printf("%s forwarded an email, %s -> %s\n", origin, from, to)
 
-	subject := msg.Header.Get("Subject")
-	fmt.Println(subject)
+    headers, err := json.Marshal(msg.Header)
+    if err != nil {
+        log.Error(err)
+        return err
+    }
 
-	callHook(from, to, subject)
+	callHook((string)(headers), "url", "domain", "id", "signature")
 
 	return nil
 }
