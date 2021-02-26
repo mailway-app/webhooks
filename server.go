@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/mail"
@@ -23,10 +24,16 @@ import (
 var (
 	internalError = errors.New("451 4.3.0 Internal server errror")
 	httpClient    *retryablehttp.Client
+
+	seededRand *rand.Rand = rand.New(
+		rand.NewSource(time.Now().UnixNano()))
 )
 
 const (
-	INT_HEADER_PREFIX = "mw-int-"
+	// prefix in lowercase to normalize and match against incoming headers
+	INT_HEADER_PREFIX    = "mw-int-"
+	MW_BODY_SECRET_TOKEN = "Mw-Int-Maildb-Secret-Token"
+	CRLF                 = "\r\n"
 )
 
 type WebhookPayload struct {
@@ -38,13 +45,16 @@ func logger(remoteIP, verb, line string) {
 	log.Printf("%s %s %s\n", remoteIP, verb, line)
 }
 
-func saveBuffer(id string) error {
-	src := fmt.Sprintf("/tmp/%s.eml", id)
+func DBSave(id string, in []byte, token string) error {
 	dest := fmt.Sprintf("/usr/local/lib/maildb/%s.eml", id)
-	err := os.Rename(src, dest)
+	f, err := os.Create(dest)
 	if err != nil {
-		return errors.Wrap(err, "could not move file")
+		return errors.Wrap(err, "could not create db file")
 	}
+	defer f.Close()
+
+	f.WriteString(fmt.Sprintf("%s: %s%s", MW_BODY_SECRET_TOKEN, token, CRLF))
+	f.Write(in)
 	return nil
 }
 
@@ -95,6 +105,12 @@ func callWebHook(wp WebhookPayload, url string, id string, domain string) error 
 	}
 }
 
+func generateToken() string {
+	token := make([]byte, 32)
+	seededRand.Read(token)
+	return fmt.Sprintf("%x", token)
+}
+
 func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
 	msg, err := mail.ReadMessage(bytes.NewReader(in))
 	if err != nil {
@@ -103,14 +119,19 @@ func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
 	}
 
 	id := msg.Header.Get("Mw-Int-Id")
+	bodyToken := generateToken()
 
-	if err := saveBuffer(id); err != nil {
+	if err := DBSave(id, in, bodyToken); err != nil {
 		log.Errorf("failed to save email buffer: %s", err)
 		return internalError
 	}
+	if err := os.Remove(fmt.Sprintf("/tmp/%s.eml", id)); err != nil {
+		log.Errorf("could not delete temporary file: %s", err)
+	}
 
-	url := msg.Header.Get("Mw-Int-Webhook-Url")
-	urlMail := ""
+	endpoint := msg.Header.Get("Mw-Int-Webhook-Url")
+	bodyUrl := fmt.Sprintf("https://%s/db/email/%s?token=%s",
+		config.CurrConfig.InstanceHostname, id, bodyToken)
 	domain := msg.Header.Get("Mw-Int-Domain")
 
 	for key := range msg.Header {
@@ -121,10 +142,10 @@ func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
 
 	data := &WebhookPayload{
 		Headers: msg.Header,
-		BodyURL: urlMail,
+		BodyURL: bodyUrl,
 	}
 
-	if err := callWebHook(*data, url, id, domain); err != nil {
+	if err := callWebHook(*data, endpoint, id, domain); err != nil {
 		if err := updateMailStatus(config.CurrConfig.ServerJWT, domain, id, MAIL_STATUS_DELIVERY_ERROR); err != nil {
 			log.Errorf("could not update email status in maildb: %s", err)
 		}
