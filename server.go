@@ -31,7 +31,11 @@ var (
 
 const (
 	// prefix in lowercase to normalize and match against incoming headers
-	INT_HEADER_PREFIX    = "mw-int-"
+	INT_HEADER_PREFIX = "mw-int-"
+
+	MW_WEBHOOK_SECRET_TOKEN = "Mw-Int-Webhook-Secret-Token"
+	MW_WEBHOOK_URL          = "Mw-Int-Webhook-Url"
+
 	MW_BODY_SECRET_TOKEN = "Mw-Int-Maildb-Secret-Token"
 	CRLF                 = "\r\n"
 )
@@ -73,12 +77,13 @@ func Run(addr string) error {
 	return srv.ListenAndServe()
 }
 
-func callWebHook(wp WebhookPayload, url string, id string, domain string) error {
+func callWebHook(wp *WebhookPayload, url string, id string, domain string, secret string) error {
 	jsonData, err := json.Marshal(wp)
 	if err != nil {
 		return errors.Wrap(err, "could not serialize request payload")
 	}
 
+	// TODO: compute HMAC sha256
 	signature := ""
 
 	req, err := retryablehttp.NewRequest("POST", url, bytes.NewBuffer(jsonData))
@@ -129,7 +134,8 @@ func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
 		log.Errorf("could not delete temporary file: %s", err)
 	}
 
-	endpoint := msg.Header.Get("Mw-Int-Webhook-Url")
+	secret := msg.Header.Get(MW_WEBHOOK_SECRET_TOKEN)
+	endpoint := msg.Header.Get(MW_WEBHOOK_URL)
 	bodyUrl := fmt.Sprintf("https://%s/db/email/%s?token=%s",
 		config.CurrConfig.InstanceHostname, id, bodyToken)
 	domain := msg.Header.Get("Mw-Int-Domain")
@@ -140,12 +146,12 @@ func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
 		}
 	}
 
-	data := &WebhookPayload{
+	data := WebhookPayload{
 		Headers: msg.Header,
 		BodyURL: bodyUrl,
 	}
 
-	if err := callWebHook(*data, endpoint, id, domain); err != nil {
+	if err := callWebHook(&data, endpoint, id, domain, secret); err != nil {
 		if err := updateMailStatus(config.CurrConfig.ServerJWT, domain, id, MAIL_STATUS_DELIVERY_ERROR); err != nil {
 			log.Errorf("could not update email status in maildb: %s", err)
 		}
