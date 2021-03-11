@@ -77,7 +77,7 @@ func Run(addr string) error {
 	return srv.ListenAndServe()
 }
 
-func callWebHook(wp *WebhookPayload, url string, id string, domain string, secret string) error {
+func callWebHook(wp *WebhookPayload, url string, id string, domain string, mailDate string, secret string) error {
 	jsonData, err := json.Marshal(wp)
 	if err != nil {
 		return errors.Wrap(err, "could not serialize request payload")
@@ -94,6 +94,7 @@ func callWebHook(wp *WebhookPayload, url string, id string, domain string, secre
 	req.Header.Set("Mw-Domain", domain)
 	req.Header.Set("Mw-Id", id)
 	req.Header.Set("Mw-Signature", signature)
+	req.Header.Set("Mw-Date", mailDate)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -139,6 +140,7 @@ func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
 	bodyUrl := fmt.Sprintf("https://%s/db/email/%s?token=%s",
 		config.CurrConfig.InstanceHostname, id, bodyToken)
 	domain := msg.Header.Get("Mw-Int-Domain")
+	mailDate := msg.Header.Get("Mw-Date")
 
 	for key := range msg.Header {
 		if strings.HasPrefix(strings.ToLower(key), INT_HEADER_PREFIX) {
@@ -151,7 +153,7 @@ func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
 		BodyURL: bodyUrl,
 	}
 
-	if err := callWebHook(&data, endpoint, id, domain, secret); err != nil {
+	if err := callWebHook(&data, endpoint, id, domain, mailDate, secret); err != nil {
 		if err := updateMailStatus(config.CurrConfig.ServerJWT, domain, id, MAIL_STATUS_DELIVERY_ERROR); err != nil {
 			log.Errorf("could not update email status in maildb: %s", err)
 		}
