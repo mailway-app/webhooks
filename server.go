@@ -140,7 +140,7 @@ func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
 	bodyUrl := fmt.Sprintf("https://%s/db/email/%s?token=%s",
 		config.CurrConfig.InstanceHostname, id, bodyToken)
 	domain := msg.Header.Get("Mw-Int-Domain")
-	emailDate := msg.Header.Get("Mw-Date")
+	emailDate := msg.Header.Get("Mw-Int-Date")
 
 	for key := range msg.Header {
 		if strings.HasPrefix(strings.ToLower(key), INT_HEADER_PREFIX) {
