@@ -131,7 +131,7 @@ func mailHandler(origin net.Addr, from string, to []string, in []byte) error {
 		log.Errorf("failed to save email buffer: %s", err)
 		return internalError
 	}
-	if err := os.Remove(fmt.Sprintf("/tmp/%s.eml", id)); err != nil {
+	if err := os.Remove(fmt.Sprintf("%s/%s.eml", config.RUNTIME_LOCATION, id)); err != nil {
 		log.Errorf("could not delete temporary file: %s", err)
 	}
 
